@@ -1,0 +1,59 @@
+function doGet(e) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+  
+  const result = rows.map(row => {
+    const obj = {};
+    headers.forEach((header, index) => {
+      obj[header] = row[index];
+    });
+    return obj;
+  }).filter(item => item.url);
+  
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Thêm function này vào Apps Script
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    
+    // Check if action is increment download
+    if (data.action === 'increment_download') {
+      const rows = sheet.getDataRange().getValues();
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i][0] === data.url) { // Match URL
+          const currentCount = rows[i][5] || 0;
+          sheet.getRange(i + 1, 6).setValue(currentCount + 1);
+          return ContentService.createTextOutput(JSON.stringify({ 
+            success: true, 
+            downloads: currentCount + 1 
+          })).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+    }
+    
+    // Normal upload
+    sheet.appendRow([
+      data.url,
+      data.title,
+      data.category,
+      data.description || '',
+      new Date().toISOString(),
+      0  // Initial downloads = 0
+    ]);
+    
+    return ContentService.createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ 
+      success: false, error: error.toString() 
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}

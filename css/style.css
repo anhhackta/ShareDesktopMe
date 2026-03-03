@@ -322,6 +322,13 @@ img {
     -webkit-text-fill-color: transparent;
 }
 
+.logo-img {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    object-fit: contain;
+}
+
 /* Search Bar */
 .search-container {
     position: relative;

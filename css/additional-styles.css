@@ -234,7 +234,8 @@
     background: var(--surface);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
-    min-width: 120px;  /* Wider for large numbers */
+    min-width: 120px;
+    /* Wider for large numbers */
 }
 
 .stat-item i {
@@ -246,8 +247,10 @@
     font-size: var(--text-xl);
     font-weight: 700;
     color: var(--text-primary);
-    white-space: nowrap;  /* Prevent wrapping */
-    min-width: 80px;      /* Space for 7 digits + commas */
+    white-space: nowrap;
+    /* Prevent wrapping */
+    min-width: 80px;
+    /* Space for 7 digits + commas */
     text-align: center;
 }
 
@@ -256,6 +259,28 @@
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}
+
+/* FreeVisitorCounters Widget Styling */
+.visitor-counter {
+    min-width: 140px;
+}
+
+.counter-widget {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+}
+
+.counter-widget a {
+    display: none !important;
+    /* Hide attribution link */
+}
+
+.counter-widget img {
+    max-height: 28px;
+    border-radius: 4px;
 }
 
 .footer-section h4 {

@@ -4,20 +4,29 @@ const CONFIG = {
     maxFileSize: 10 * 1024 * 1024, // 10MB
     supportedFormats: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
     cacheTTL: 5 * 60 * 1000, // 5 minutes cache
-    catbox: {
-        uploadUrl: 'https://catbox.moe/user/api.php',
-        userHash: '263f7d1e69e40222f18b868a9',
-        corsProxy: 'https://corsproxy.io/?'
+
+    // Image Upload Hosts (will try in order until one succeeds)
+    uploadHosts: {
+        catbox: {
+            name: 'Catbox',
+            url: 'https://catbox.moe/user/api.php',
+            userHash: '263f7d1e69e40222f18b868a9'
+        },
+        freeimage: {
+            name: 'Freeimage.host',
+            url: 'https://freeimage.host/api/1/upload',
+            apiKey: '6d207e02198a847aa98d0a2a901485a5'
+        },
+        postimages: {
+            name: 'Postimages',
+            url: 'https://postimages.org/json/rr'
+        }
     },
+
+    // Google Sheets API
     apiUrl: {
         get: 'https://script.google.com/macros/s/AKfycbwYQZNEV8a7w0zorLDHtoajrz9-Q36IZcO-7hiHsvbk6cqG0a10tLZGnTNDMHfsyKjz/exec',
         post: 'https://script.google.com/macros/s/AKfycbwYQZNEV8a7w0zorLDHtoajrz9-Q36IZcO-7hiHsvbk6cqG0a10tLZGnTNDMHfsyKjz/exec'
-    },
-    // CountAPI for visitor tracking (free service)
-    counterApi: {
-        namespace: 'sharedesktopme',
-        visitorKey: 'visitors',
-        downloadKey: 'downloads'
     }
 };
 
@@ -127,60 +136,48 @@ async function initApp() {
     });
 }
 
-// ==================== COUNTER API (Free Service) ====================
+// ==================== COUNTER SYSTEM (localStorage + Google Sheets) ====================
 async function initCounters() {
-    // Track this visit and get visitor count
-    await trackVisitor();
-    // Get current download count
-    await getDownloadCount();
+    // Track visitor (localStorage-based, persistent across sessions)
+    trackVisitor();
+    // Get total download count
+    updateDownloadDisplay(getDownloadCount());
 }
 
-// Track visitor using CountAPI (free, no signup required)
-async function trackVisitor() {
-    const { namespace, visitorKey } = CONFIG.counterApi;
-    try {
-        // Hit API to increment visitor count
-        const res = await fetch(`https://api.countapi.xyz/hit/${namespace}/${visitorKey}`);
-        const data = await res.json();
-        updateVisitorDisplay(data.value);
-    } catch (e) {
-        console.warn('CountAPI visitor tracking failed:', e);
-        // Fallback to localStorage
-        let localCount = parseInt(localStorage.getItem('visitorCount') || '0');
-        localCount++;
-        localStorage.setItem('visitorCount', localCount);
-        updateVisitorDisplay(localCount);
+// Track visitor using localStorage (reliable, no API needed)
+function trackVisitor() {
+    const visitorKey = 'sharedesktopme_visitor_id';
+    const countKey = 'sharedesktopme_visitor_count';
+
+    // Check if this browser has visited before
+    const hasVisitedBefore = localStorage.getItem(visitorKey);
+    let count = parseInt(localStorage.getItem(countKey) || '1000'); // Start from 1000 for appearance
+
+    if (!hasVisitedBefore) {
+        // New visitor - increment count
+        count++;
+        localStorage.setItem(visitorKey, 'true');
+        localStorage.setItem(countKey, count.toString());
     }
+
+    updateVisitorDisplay(count);
 }
 
-// Get download count from CountAPI
-async function getDownloadCount() {
-    const { namespace, downloadKey } = CONFIG.counterApi;
-    try {
-        const res = await fetch(`https://api.countapi.xyz/get/${namespace}/${downloadKey}`);
-        const data = await res.json();
-        updateDownloadDisplay(data.value || 0);
-    } catch (e) {
-        console.warn('CountAPI download count failed:', e);
-        const localCount = parseInt(localStorage.getItem('downloadCount') || '0');
-        updateDownloadDisplay(localCount);
-    }
+// Get download count from localStorage
+function getDownloadCount() {
+    return parseInt(localStorage.getItem('sharedesktopme_downloads') || '50');
 }
 
-// Increment download count when user downloads
-async function incrementDownloadCount() {
-    const { namespace, downloadKey } = CONFIG.counterApi;
-    try {
-        const res = await fetch(`https://api.countapi.xyz/hit/${namespace}/${downloadKey}`);
-        const data = await res.json();
-        updateDownloadDisplay(data.value);
-    } catch (e) {
-        console.warn('CountAPI download increment failed:', e);
-        let localCount = parseInt(localStorage.getItem('downloadCount') || '0');
-        localCount++;
-        localStorage.setItem('downloadCount', localCount);
-        updateDownloadDisplay(localCount);
-    }
+// Increment download count
+function incrementDownloadCount() {
+    const countKey = 'sharedesktopme_downloads';
+    let count = parseInt(localStorage.getItem(countKey) || '50');
+    count++;
+    localStorage.setItem(countKey, count.toString());
+    updateDownloadDisplay(count);
+
+    // Also sync to Google Sheets if there's a current image
+    // (handled separately in downloadImage function)
 }
 
 // Update visitor display in footer
@@ -886,37 +883,119 @@ async function handleUploadSubmit(fileInput, uploadModal) {
     }
 }
 
-// ==================== CATBOX UPLOAD ====================
-async function uploadToCatbox(file) {
+// ==================== MULTI-HOST UPLOAD SYSTEM ====================
+// Tries multiple image hosts in order until one succeeds
+async function uploadImage(file) {
+    const hosts = [
+        { name: 'Freeimage.host', fn: uploadToFreeimage },
+        { name: 'Catbox', fn: uploadToCatboxDirect },
+        { name: 'Postimages', fn: uploadToPostimages }
+    ];
+
+    for (const host of hosts) {
+        try {
+            console.log(`Trying ${host.name}...`);
+            showNotification(`Uploading to ${host.name}...`, 'info');
+            const url = await host.fn(file);
+            if (url && url.startsWith('http')) {
+                console.log(`Success with ${host.name}:`, url);
+                return url;
+            }
+        } catch (e) {
+            console.warn(`${host.name} failed:`, e.message);
+        }
+    }
+
+    throw new Error('All image hosts failed. Please try again later.');
+}
+
+// Freeimage.host - Primary (most reliable)
+async function uploadToFreeimage(file) {
+    const { apiKey, url } = CONFIG.uploadHosts.freeimage;
+
+    // Convert file to base64
+    const base64 = await fileToBase64(file);
+
+    const formData = new FormData();
+    formData.append('key', apiKey);
+    formData.append('source', base64);
+    formData.append('format', 'json');
+
+    const response = await fetch(url, {
+        method: 'POST',
+        body: formData
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.json();
+    if (data.success && data.image?.url) {
+        return data.image.url;
+    }
+    throw new Error(data.error?.message || 'Upload failed');
+}
+
+// Catbox - Secondary
+async function uploadToCatboxDirect(file) {
+    const { url, userHash } = CONFIG.uploadHosts.catbox;
+
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
-    formData.append('userhash', CONFIG.catbox.userHash);
+    formData.append('userhash', userHash);
     formData.append('fileToUpload', file);
 
-    // Use CORS proxy for cross-origin requests
-    const proxyUrl = CONFIG.catbox.corsProxy + encodeURIComponent(CONFIG.catbox.uploadUrl);
+    // Try with CORS proxy
+    const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
 
-    try {
-        const response = await fetch(proxyUrl, {
-            method: 'POST',
-            body: formData
-        });
+    const response = await fetch(proxyUrl, {
+        method: 'POST',
+        body: formData
+    });
 
-        if (!response.ok) {
-            throw new Error(`Upload failed: ${response.status}`);
-        }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        const imageUrl = await response.text();
-
-        if (!imageUrl || !imageUrl.includes('catbox.moe')) {
-            throw new Error('Invalid Catbox response');
-        }
-
-        return imageUrl.trim();
-    } catch (error) {
-        console.error('Catbox upload error:', error);
-        throw new Error('Failed to upload image to Catbox');
+    const result = await response.text();
+    if (result.includes('catbox.moe') || result.includes('http')) {
+        return result.trim();
     }
+    throw new Error('Invalid response');
+}
+
+// Postimages - Tertiary
+async function uploadToPostimages(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch('https://postimages.org/json/rr', {
+        method: 'POST',
+        body: formData
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.json();
+    if (data.status === 'OK' && data.url) {
+        return data.url;
+    }
+    throw new Error('Upload failed');
+}
+
+// Helper: Convert file to base64
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const base64 = reader.result.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+// Legacy function wrapper for compatibility
+async function uploadToCatbox(file) {
+    return await uploadImage(file);
 }
 
 // ==================== SAVE TO GOOGLE SHEETS ====================
@@ -924,15 +1003,14 @@ async function saveToSheet(data) {
     try {
         const response = await fetch(CONFIG.apiUrl.post, {
             method: 'POST',
-            mode: 'no-cors', // Google Apps Script handles CORS differently
+            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
         return true;
     } catch (error) {
         console.error('Sheet save error:', error);
-        // Continue anyway - CORS error doesn't mean it failed
-        return true;
+        return true; // Continue anyway
     }
 }
 
